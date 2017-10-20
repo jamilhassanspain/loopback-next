@@ -4,8 +4,9 @@
 // License text available at https://opensource.org/licenses/MIT
 
 import {Reflector} from './reflect';
-import {BoundValue, ValueOrPromise} from './binding';
+import {Binding, BoundValue, ValueOrPromise} from './binding';
 import {Context} from './context';
+import {isPromise} from './is-promise';
 
 const PARAMETERS_KEY = 'inject:parameters';
 const PROPERTIES_KEY = 'inject:properties';
@@ -24,6 +25,7 @@ export interface Injection {
   bindingKey: string; // Binding key
   metadata?: {[attribute: string]: BoundValue}; // Related metadata
   resolve?: ResolverFunction; // A custom resolve function
+  binding?: Binding; // The optional binding for the target class
 }
 
 /**
@@ -151,6 +153,41 @@ export namespace inject {
   ) {
     return inject(bindingKey, metadata, resolveAsSetter);
   };
+
+  /**
+   * Inject an option from `options` of the parent binding. If no corresponding
+   * option value is present, `undefined` will be injected.
+   *
+   * @example
+   * ```ts
+   * class Store {
+   *   constructor(
+   *     @inject.option('x') public optionX: number,
+   *     @inject.option('y') public optionY: string,
+   *   ) { }
+   * }
+   *
+   * ctx.bind('store1').toClass(Store).withOptions({ x: 1, y: 'a' });
+   * ctx.bind('store2').toClass(Store).withOptions({ x: 2, y: 'b' });
+   *
+   *  const store1 = ctx.getSync('store1');
+   *  expect(store1.optionX).to.eql(1);
+   *  expect(store1.optionY).to.eql('a');
+
+   * const store2 = ctx.getSync('store2');
+   * expect(store2.optionX).to.eql(2);
+   * expect(store2.optionY).to.eql('b');
+   * ```
+   *
+   * @param bindingKey Name of the option. Use `''` for the `options` object
+   * @param metadata Optional metadata to help the injection
+   */
+  export const option = function injectOption(
+    bindingKey: string,
+    metadata?: Object,
+  ) {
+    return inject(bindingKey, metadata, resolveAsOption);
+  };
 }
 
 function resolveAsGetter(ctx: Context, injection: Injection) {
@@ -163,6 +200,22 @@ function resolveAsSetter(ctx: Context, injection: Injection) {
   return function setter(value: BoundValue) {
     ctx.bind(injection.bindingKey).to(value);
   };
+}
+
+function resolveAsOption(ctx: Context, injection: Injection) {
+  if (injection.binding) {
+    const {key, path} = Binding.parseKeyWithPath(injection.bindingKey);
+    let boundValue = injection.binding.options;
+    if (isPromise(boundValue)) {
+      if (key !== '') {
+        return boundValue.then(v => Binding.getDeepProperty(v[key], path));
+      } else {
+        return boundValue.then(v => Binding.getDeepProperty(v, path));
+      }
+    }
+    return Binding.getDeepProperty(key ? boundValue[key] : boundValue, path);
+  }
+  return undefined;
 }
 
 /**
